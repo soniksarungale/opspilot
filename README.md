@@ -7,6 +7,8 @@ tracks the case to closure. Every step by an agent or a person is written to an 
 
 Live demo: https://opspilot.soniksarungale.com
 
+Documents: `docs/PRD.pdf` (source `docs/PRD.md`) and `docs/OpsPilot.pptx`.
+
 Demo accounts (password for all: `demo1234`):
 
 | User | Role | Can approve |
