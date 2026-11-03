@@ -35,14 +35,28 @@ async function api(path, body, method) {
 }
 
 function badge(level) {
-  return level ? `<span class="risk-${esc(level)}">${esc(level)}</span>` : '<span class="muted">-</span>';
+  return level ? `<span class="risk risk-${esc(level)}">${esc(level)}</span>` : '<span class="muted">-</span>';
+}
+const pill = status => status === "processing" ? '<span class="status status-processing"><span class="spin"></span> analysing</span>'
+  : `<span class="status status-${esc(status)}">${esc(label(status))}</span>`;
+const STEPS = ["received", "review", "pending_approval", "in_progress", "resolved", "closed"];
+function stepper(status) {
+  if (status === "cancelled") return "";
+  const at = { processing: 0, needs_info: 1 }[status] ?? STEPS.indexOf(status);
+  return `<ol class="steps">${STEPS.map((s, i) => `<li class="${i < at ? "done" : i === at ? "now" : ""}">${
+    i === 1 && status === "needs_info" ? "needs info" : label(s)}</li>`).join("")}</ol>`;
+}
+function meter(score) {
+  if (score == null) return "";
+  return `<div class="meter ${score < 0.6 ? "low" : score < 0.8 ? "mid" : ""}"><i style="width:${Math.round(score * 100)}%"></i></div>`;
 }
 function flagTags(codes) {
   return codes.map(c => `<span class="tag ${flagClass(c)}">${esc(label(c))}</span>`).join("");
 }
 
 function loginView() {
-  return `<div class="login box"><h1>OpsPilot</h1>
+  return `<div class="login box"><h1>OpsPilot</h1><p class="muted">Operations requests, from inbox to closure: extracted, checked,
+    assessed and routed for approval, with every agent and human step on record.</p>
     <form id="login"><div class="row"><label>Username</label><input name="username" autocomplete="username"></div>
     <div class="row"><label>Password</label><input name="password" type="password" autocomplete="current-password"></div>
     <button class="primary">Log in</button></form>
@@ -59,7 +73,7 @@ function shell(content, count) {
   const route = location.hash.split("/")[1] || "requests";
   const link = (r, text) => `<a href="#/${r}" class="${route === r ? "on" : ""}">${text}</a>`;
   return `<header><span class="brand">OpsPilot</span><nav>
-    ${link("requests", "Requests")}${link("inbox", "Inbox")}${link("approvals", "Approvals" + (count ? ` (${count})` : ""))}
+    ${link("requests", "Requests")}${link("inbox", "Inbox")}${link("approvals", "Approvals" + (count ? `<span class="count">${count}</span>` : ""))}
     ${link("report", "Report")}${me.role === "admin" ? link("admin", "Admin") : ""}</nav>
     <span class="who">${esc(me.name)} (${esc(label(me.role))})</span><button data-act="logout">Logout</button></header>
     <main>${content}</main>`;
@@ -69,9 +83,12 @@ async function requestsView() {
   const rows = await api("/api/requests");
   if (rows.some(r => r.status === "processing")) timer = setTimeout(render, 3000);
   const body = rows.map(r => `<tr><td>${r.id}</td><td><a href="#/requests/${r.id}">${esc(r.subject)}</a></td>
-    <td>${esc(label(r.status))}</td><td>${badge(r.risk)}</td><td>${r.confidence ?? ""}</td>
+    <td>${pill(r.status)}</td><td>${badge(r.risk)}</td><td>${r.confidence ?? ""}</td>
     <td>${esc(when(r.deadline))}</td><td>${flagTags(r.flags)}</td></tr>`).join("");
-  return `<h1>Requests</h1><div class="wrap"><table><tr><th>#</th><th>Subject</th><th>Status</th><th>Risk</th>
+  const open = rows.filter(r => OPEN.includes(r.status));
+  const stat = (n, text) => `<div class="stat"><b>${n}</b><span>${text}</span></div>`;
+  return `<h1>Requests</h1><div class="stats">${stat(open.length, "Open")}${stat(rows.filter(r => r.status === "pending_approval").length, "Awaiting approval")}
+    ${stat(open.filter(r => ["high", "critical"].includes(r.risk)).length, "High or critical risk")}${stat(rows.filter(r => r.status === "needs_info").length, "Need information")}</div><div class="wrap"><table><tr><th>#</th><th>Subject</th><th>Status</th><th>Risk</th>
     <th>Confidence</th><th>Deadline</th><th>Flags</th></tr>${body || '<tr><td colspan="7" class="muted">No requests yet. Import one from the inbox.</td></tr>'}</table></div>`;
 }
 
@@ -79,7 +96,7 @@ async function inboxView() {
   const mails = await api("/api/inbox");
   const body = mails.map(m => `<tr><td>${esc(when(m.received_at))}</td><td>${esc(m.sender)}</td><td>${esc(m.subject)}</td>
     <td>${m.request_id ? `<a href="#/requests/${m.request_id}">Request #${m.request_id}</a>`
-      : `<button data-act="import" data-id="${m.id}">Import</button>`}</td></tr>`).join("");
+      : `<button class="primary" data-act="import" data-id="${m.id}">Import</button>`}</td></tr>`).join("");
   return `<h1>Inbox</h1><div class="wrap"><table><tr><th>Received</th><th>From</th><th>Subject</th><th></th></tr>${body}</table></div>
     <h2>New request</h2><form id="new-request" class="box"><div class="row"><label>Subject</label><input name="subject" size="50" required maxlength="200"></div>
     <div class="row"><label>Sender</label><input name="sender" size="50" required maxlength="200"></div>
@@ -100,8 +117,8 @@ function factRows(req) {
 function optionCard(o, i, req) {
   const low = req.flags.some(f => f.code === "low_confidence");
   const tags = (o.recommended && !low ? '<span class="tag green">Recommended</span>' : "") + (o.rejected ? '<span class="tag red">Rejected</span>' : "");
-  const choose = req.status === "review" && !o.rejected ? `<button data-act="choose" data-i="${i}">Choose</button>` : "";
-  return `<div class="option ${o.rejected ? "rejected" : ""}"><h3>${esc(o.title)} ${tags}</h3>
+  const choose = req.status === "review" && !o.rejected ? `<button class="${o.recommended && !low ? "primary" : ""}" data-act="choose" data-i="${i}">Choose</button>` : "";
+  return `<div class="option ${o.rejected ? "rejected" : o.recommended && !low ? "recommended" : ""}"><h3>${esc(o.title)} ${tags}</h3>
     <div>Extra cost: <b>${rs(o.est_cost_inr)}</b> ${o.time_to_effect ? `| ${esc(o.time_to_effect)}` : ""}</div>
     ${(o.actions || []).length ? `<ul>${o.actions.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <div>${esc(o.rationale)}</div>${o.risks ? `<div class="muted">Risks: ${esc(o.risks)}</div>` : ""}<div>${choose}</div></div>`;
@@ -109,14 +126,16 @@ function optionCard(o, i, req) {
 
 function approvalRows(req) {
   return req.approvals.map(a => `<tr><td>${esc(label(a.role))}</td><td>${rs(a.amount)}</td><td>${esc(when(a.due_at))}</td>
-    <td>${esc(a.status)}</td><td>${a.status === "pending" ? `<button data-act="decide" data-id="${a.id}" data-approve="1">Approve</button>
+    <td>${pill(a.status)}</td><td>${a.status === "pending" ? `<button data-act="decide" data-id="${a.id}" data-approve="1">Approve</button>
     <button class="danger" data-act="decide" data-id="${a.id}" data-approve="0">Reject</button>` : esc(a.reason || "")}</td></tr>`).join("");
 }
 
 function auditRows(req) {
   return req.audit.map(a => {
     const who = a.actor_type === "agent" ? `<i>${esc(a.actor)}</i>` : esc(a.actor);
-    return `<tr><td>${esc(when(a.ts))}</td><td>${who}</td><td>${esc(label(a.action))}</td><td class="muted">${esc(JSON.stringify(a.detail))}</td></tr>`;
+    const detail = Object.entries(a.detail).filter(([, v]) => v !== "" && v !== null && !(Array.isArray(v) && !v.length))
+      .map(([k, v]) => `${label(k)}: ${Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
+    return `<tr><td class="nowrap">${esc(when(a.ts))}</td><td>${who}</td><td class="nowrap">${esc(label(a.action))}</td><td class="detail">${esc(detail)}</td></tr>`;
   }).join("");
 }
 
@@ -131,7 +150,7 @@ async function detailView(id) {
   const messages = req.messages.map(m => `<div class="box"><b>${esc(m.subject)}</b> <span class="muted">to ${esc(m.recipient)} (${esc(m.status)})</span>
     <pre class="text">${esc(m.body)}</pre>${m.status === "failed" ? '<div class="flag red">Not delivered: the mail server was unavailable</div>' : ""}
     ${m.status === "draft" || m.status === "failed" ? `<button data-act="send" data-id="${m.id}">${m.status === "failed" ? "Retry send" : "Send"}</button>` : ""}</div>`).join("");
-  return `<p><a href="#/requests">&larr; Requests</a></p><h1>#${req.id} ${esc(req.subject)} <span class="tag">${esc(label(req.status))}</span></h1>
+  return `<p><a href="#/requests">&larr; Requests</a></p><h1>#${req.id} ${esc(req.subject)} ${pill(req.status)}</h1>${stepper(req.status)}
   <div class="cols"><div>
     <div class="box"><div class="muted">From ${esc(req.sender)} via ${esc(req.channel)}, ${esc(when(req.received_at))}</div><pre class="mail">${esc(req.body)}</pre></div>
     <h2>Flags</h2>${req.flags.map(f => `<div class="flag ${flagClass(f.code)}">${esc(f.message)}</div>`).join("") || '<div class="muted">None</div>'}
@@ -141,7 +160,7 @@ async function detailView(id) {
   </div><div>
     <h2>Risk</h2><div class="box">Agent: ${badge(risk.risk_level)} | Rules: ${badge(risk.rule_level)} | Final: ${badge(risk.final_level)}
       ${risk.impact ? `<div>${esc(risk.impact)}</div>` : ""}<ul>${(risk.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
-      <div>Confidence: <b>${req.confidence ?? "-"}</b> ${lowConf ? '<span class="tag red">low</span>' : ""}</div></div>
+      <div style="margin-top:8px">Confidence: <b>${req.confidence ?? "-"}</b> ${lowConf ? '<span class="tag red">low</span>' : ""}${meter(req.confidence)}</div></div>
     <h2>Options</h2>${lowConf ? '<div class="flag amber">Not enough evidence: choose or write an action yourself</div>' : ""}${options || '<div class="muted">No options yet</div>'}
     ${req.status === "review" ? `<form id="custom" class="box"><b>Custom action</b><div class="row"><label>Action</label><input name="title" size="40" required></div>
       <div class="row"><label>Extra cost (Rs)</label><input name="cost" type="number" min="0" value="0" required></div>
