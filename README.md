@@ -120,7 +120,7 @@ demo) the data is rebuilt once a day, because the sample emails say "today".
 
 ## Tests
 
-`uv run pytest -q` runs 75 tests against a temporary database with a fake model: the rules (limits, confidence,
+`uv run pytest -q` runs 77 tests against a temporary database with a fake model: the rules (limits, confidence,
 grounding, duplicates), the workflow (happy path and each edge case above) and the API (login, roles, error codes).
 No test calls the real model.
 

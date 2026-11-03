@@ -119,7 +119,7 @@ model status; per-user limits stop one user exhausting the model.
 | Availability | If the model fails, the request stays usable: retry, or fill in facts by hand |
 | Performance | Analysis under one minute per request; the interface stays responsive while it runs |
 | Cost control | At most 30 analysis actions per user per hour; one model call at a time |
-| Operability | One service and one database file; health endpoint; container image; 75 automated tests with a fake model |
+| Operability | One service and one database file; health endpoint; container image; 77 automated tests with a fake model |
 
 ## 5. Assumptions and trade-offs
 

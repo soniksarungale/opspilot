@@ -279,3 +279,15 @@ def test_summary_is_stored_on_the_request(fake_llm):
 def test_inr_uses_indian_grouping():
     assert workflow.inr(500000) == "Rs 5,00,000"
     assert workflow.inr(40000) == "Rs 40,000"
+
+
+def test_risk_agent_and_rules_far_apart_are_flagged_and_higher_level_used(fake_llm):
+    fake_llm.risk_level = "low"
+    req = imported(1)
+    assert "agents_disagree" in codes(req)
+    assert req["risk"]["final_level"] == req["risk"]["rule_level"] != "low"
+
+
+def test_email_with_several_issues_lists_every_intent(fake_llm):
+    req = imported(6)
+    assert len(req["facts"]["intents"]) == 3 and req["status"] == "needs_info"
