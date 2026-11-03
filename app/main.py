@@ -223,7 +223,8 @@ def approvals(mine: int = Query(0), user: dict = Depends(current_user)):
                     "WHERE a.status='pending' ORDER BY a.due_at")
     if mine:
         rows = [a for a in rows if rules.can_approve(user["role"], a["amount"])]
-    return rows
+    now = clock.now()
+    return [{**a, "overdue": clock.parse(a["due_at"]) < now} for a in rows]
 
 
 @app.post("/api/approvals/{approval_id}/decide")
