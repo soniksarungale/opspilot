@@ -30,7 +30,11 @@ def test_happy_path_from_email_to_closure(fake_llm):
     assert approval["role"] == "manager" and approval["amount"] == 40000
     workflow.decide(approval["id"], user("manager"), True, "ok")
     assert workflow.get(req["id"])["status"] == "in_progress"
-    workflow.transition(req["id"], user("analyst"), "resolve")
+    with pytest.raises(workflow.InputError):
+        workflow.transition(req["id"], user("analyst"), "resolve")
+    workflow.transition(req["id"], user("analyst"), "resolve", "260 units arrived from Mumbai")
+    update = db.one("SELECT * FROM messages WHERE request_id=? AND subject LIKE 'Resolved:%'", (req["id"],))
+    assert update["recipient"] == req["sender"] and "260 units arrived" in update["body"]
     workflow.transition(req["id"], user("analyst"), "close")
     assert workflow.get(req["id"])["status"] == "closed"
     types = {a["actor_type"] for a in db.query("SELECT actor_type FROM audit WHERE request_id=?", (req["id"],))}

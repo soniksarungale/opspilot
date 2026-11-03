@@ -37,6 +37,14 @@ async function api(path, body, method) {
 function badge(level) {
   return level ? `<span class="risk risk-${esc(level)}">${esc(level)}</span>` : '<span class="muted">-</span>';
 }
+const NEXT = {
+  processing: "Wait: the agents are analysing the request.",
+  needs_info: "Fill in the missing facts with Edit, or send the clarification draft and retry the analysis.",
+  review: "Choose an option or write a custom action.",
+  pending_approval: "Waiting for the approver shown under Approvals.",
+  in_progress: "Carry out the chosen action, then click Resolve and say what was done.",
+  resolved: "Send the resolution update to the requester, then click Close.",
+};
 const pill = status => status === "processing" ? '<span class="status status-processing"><span class="spin"></span> analysing</span>'
   : `<span class="status status-${esc(status)}">${esc(label(status))}</span>`;
 const STEPS = ["received", "review", "pending_approval", "in_progress", "resolved", "closed"];
@@ -84,18 +92,18 @@ async function requestsView() {
   if (rows.some(r => r.status === "processing")) timer = setTimeout(render, 3000);
   const body = rows.map(r => `<tr><td>${r.id}</td><td><a href="#/requests/${r.id}">${esc(r.subject)}</a></td>
     <td>${pill(r.status)}</td><td>${badge(r.risk)}</td><td>${r.confidence ?? ""}</td>
-    <td>${esc(when(r.deadline))}</td><td>${flagTags(r.flags)}</td></tr>`).join("");
+    <td>${esc(when(r.deadline))}</td><td class="muted">${esc(NEXT[r.status] || "")}</td><td>${flagTags(r.flags)}</td></tr>`).join("");
   const open = rows.filter(r => OPEN.includes(r.status));
   const stat = (n, text) => `<div class="stat"><b>${n}</b><span>${text}</span></div>`;
   return `<h1>Requests</h1><div class="stats">${stat(open.length, "Open")}${stat(rows.filter(r => r.status === "pending_approval").length, "Awaiting approval")}
-    ${stat(open.filter(r => ["high", "critical"].includes(r.risk)).length, "High or critical risk")}${stat(rows.filter(r => r.status === "needs_info").length, "Need information")}</div><div class="wrap"><table><tr><th>#</th><th>Subject</th><th>Status</th><th>Risk</th>
-    <th>Confidence</th><th>Deadline</th><th>Flags</th></tr>${body || '<tr><td colspan="7" class="muted">No requests yet. Import one from the inbox.</td></tr>'}</table></div>`;
+    ${stat(open.filter(r => ["high", "critical"].includes(r.risk)).length, "High or critical risk")}${stat(rows.filter(r => r.status === "needs_info").length, "Need information")}${stat(rows.filter(r => r.status === "in_progress").length, "To resolve")}</div><div class="wrap"><table><tr><th>#</th><th>Subject</th><th>Status</th><th>Risk</th>
+    <th>Confidence</th><th>Deadline</th><th>Next step</th><th>Flags</th></tr>${body || '<tr><td colspan="8" class="muted">No requests yet. Import one from the inbox.</td></tr>'}</table></div>`;
 }
 
 async function inboxView() {
   const mails = await api("/api/inbox");
-  const body = mails.map(m => `<tr><td>${esc(when(m.received_at))}</td><td>${esc(m.sender)}</td><td>${esc(m.subject)}</td>
-    <td>${m.request_id ? `<a href="#/requests/${m.request_id}">Request #${m.request_id}</a>`
+  const body = mails.map(m => `<tr><td>${esc(when(m.received_at))}</td><td>${esc(m.sender)}</td><td><details><summary>${esc(m.subject)}</summary><pre class="mail">${esc(m.body)}</pre></details></td>
+    <td class="nowrap">${m.request_id ? `<a href="#/requests/${m.request_id}">Request #${m.request_id}</a>`
       : `<button class="primary" data-act="import" data-id="${m.id}">Import</button>`}</td></tr>`).join("");
   return `<h1>Inbox</h1><div class="wrap"><table><tr><th>Received</th><th>From</th><th>Subject</th><th></th></tr>${body}</table></div>
     <h2>New request</h2><form id="new-request" class="box"><div class="row"><label>Subject</label><input name="subject" size="50" required maxlength="200"></div>
@@ -150,7 +158,7 @@ async function detailView(id) {
   const messages = req.messages.map(m => `<div class="box"><b>${esc(m.subject)}</b> <span class="muted">to ${esc(m.recipient)} (${esc(m.status)})</span>
     <pre class="text">${esc(m.body)}</pre>${m.status === "failed" ? '<div class="flag red">Not delivered: the mail server was unavailable</div>' : ""}
     ${m.status === "draft" || m.status === "failed" ? `<button data-act="send" data-id="${m.id}">${m.status === "failed" ? "Retry send" : "Send"}</button>` : ""}</div>`).join("");
-  return `<p><a href="#/requests">&larr; Requests</a></p><h1>#${req.id} ${esc(req.subject)} ${pill(req.status)}</h1>${stepper(req.status)}
+  return `<p><a href="#/requests">&larr; Requests</a></p><h1>#${req.id} ${esc(req.subject)} ${pill(req.status)}</h1>${stepper(req.status)}${NEXT[req.status] ? `<div class="flag next"><b>Next step:</b> ${esc(NEXT[req.status])}</div>` : ""}
   <div class="cols"><div>
     <div class="box"><div class="muted">From ${esc(req.sender)} via ${esc(req.channel)}, ${esc(when(req.received_at))}</div><pre class="mail">${esc(req.body)}</pre></div>
     <h2>Flags</h2>${req.flags.map(f => `<div class="flag ${flagClass(f.code)}">${esc(f.message)}</div>`).join("") || '<div class="muted">None</div>'}
@@ -245,7 +253,9 @@ const actions = {
     await api(`/api/approvals/${d.id}/decide`, { approve: d.approve === "1", reason });
   },
   async status(d) {
-    const note = d.action === "cancel" ? prompt("Why is this being cancelled?") || "" : "";
+    const ask = { cancel: "Why is this being cancelled?", resolve: "What was done to resolve it?" }[d.action];
+    const note = ask ? prompt(ask) : "";
+    if (ask && !note) return;
     await api(`/api/requests/${reqId()}/transition`, { action: d.action, note });
   },
   async retry() { await api(`/api/requests/${reqId()}/retry`, {}); },

@@ -70,7 +70,7 @@ form label { display: block; font-size: 12px; font-weight: 600; color: var(--mut
 .status-needs_info, .status-pending_approval { background: var(--amber-soft); color: var(--amber); }
 .status-in_progress, .status-resolved, .status-closed { background: var(--green-soft); color: var(--green); }
 .status-cancelled { background: #eef1f5; color: var(--muted); text-decoration: line-through; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 18px; }
 .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
 .stat b { display: block; font-size: 26px; line-height: 1.1; }
 .stat span { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
@@ -88,3 +88,5 @@ pre.text { white-space: pre-wrap; font-family: inherit; margin: 6px 0; }
 td.nowrap { white-space: nowrap; }
 .detail { color: var(--muted); font-size: 13px; }
 @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } main { padding: 12px; } header { padding: 8px 12px; gap: 8px; } header nav { order: 3; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; } }
+.flag.next { background: var(--brand-soft); border-color: var(--brand); margin-bottom: 16px; }
+details summary { cursor: pointer; }

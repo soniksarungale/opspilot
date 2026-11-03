@@ -418,6 +418,12 @@ def transition(request_id: int, user: dict, action: str, note: str = "") -> None
         needed, after = TRANSITIONS[action]
         if before != needed:
             raise ValueError(f"Cannot {action} a request that is {before}")
+        if action == "resolve":
+            if not note.strip():
+                raise InputError("Say what was done to resolve the request")
+            _add_message(request_id, req["sender"], f"Resolved: {req['subject']}",
+                         f"Hello,\n\nYour request \"{req['subject']}\" has been resolved.\n\nWhat was done: {note.strip()}\n\n"
+                         "Operations team")
     else:
         raise InputError("Unknown action")
     _save(request_id, status=after)

@@ -56,7 +56,7 @@ email / manual entry
         |
  cost > 0, high risk or low confidence ?  -> approval routed by amount  -> approve / reject / escalate
         |
- in progress -> resolved -> closed        comms agent drafts emails, reporter agent writes summaries
+ in progress -> resolved (with outcome note) -> closed        comms agent drafts emails, reporter agent writes summaries
 ```
 
 **How agents share context.** There is no hidden shared memory. Each request row holds the facts, evidence, risk,
@@ -85,6 +85,10 @@ action goes to an approver.
 - Email text is passed as untrusted data. Pattern checks run in code as well, so a hostile email is flagged even if the
   model misses it.
 - Users can edit any extracted field; the edit is recorded with the reason and the analysis is re-run.
+
+**Tracking to closure.** Every request shows its next step and who it is waiting for, and the requests page counts
+what is open, awaiting approval, high risk, missing information and waiting to be resolved. Resolving needs a note on
+what was done; it is recorded in the audit trail and a resolution update to the requester is drafted for sending.
 
 **Monitoring and audit.** The `audit` table is append-only. It records each agent run (model, duration, attempt,
 success, error, prompt version), every user action with before and after values, system actions such as escalation,
@@ -132,5 +136,4 @@ No test calls the real model.
 - Demo accounts are shared, so evaluators see each other's requests; the admin can reset the data.
 - SQLite with a single writer lock is enough for a demo, not for many users.
 
-Next steps: read a real mailbox (IMAP), move storage to a hosted database, retry and report failed notifications,
-and add session expiry.
+Next steps: read a real mailbox (IMAP), move storage to a hosted database, and add session expiry.
