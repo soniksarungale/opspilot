@@ -141,6 +141,17 @@ def confidence(missing, ungrounded, conflicts, disagree: bool, injection: bool, 
     return round(min(1.0, max(0.0, score)), 2)
 
 
+def approval_reasons(cost: int, risk_level: str | None, low_confidence: bool) -> list[str]:
+    reasons = []
+    if cost > 0:
+        reasons.append("extra cost")
+    if risk_level in ("high", "critical"):
+        reasons.append(f"{risk_level} risk")
+    if low_confidence:
+        reasons.append("low confidence")
+    return reasons
+
+
 def approver_for(amount: int) -> str:
     for role, limit in APPROVAL_LIMITS.items():
         if limit is None or amount <= limit:

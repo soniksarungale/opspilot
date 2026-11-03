@@ -98,6 +98,15 @@ def set_setting(key: str, value: str) -> None:
             (key, value))
 
 
+def reset() -> None:
+    with _lock:
+        conn = _get()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+            conn.execute(f'DROP TABLE IF EXISTS "{row[0]}"')
+        conn.commit()
+    init()
+
+
 def init() -> None:
     with _lock:
         conn = _get()

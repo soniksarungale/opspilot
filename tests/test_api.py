@@ -113,3 +113,15 @@ def test_detail_includes_approvals_and_audit(fake_llm):
     request_id = request_awaiting(40000)
     detail = client_for("analyst").get(f"/api/requests/{request_id}").json()
     assert detail["approvals"][0]["role"] == "manager" and detail["audit"]
+
+
+def test_logout_keeps_other_sessions_of_the_same_user():
+    first, second = client_for("analyst"), client_for("analyst")
+    first.post("/api/logout")
+    assert first.get("/api/me").status_code == 401
+    assert second.get("/api/me").status_code == 200
+
+
+def test_only_admin_can_reset_demo():
+    assert client_for("manager").post("/api/admin/reset").status_code == 403
+    assert client_for("admin").post("/api/admin/reset").status_code == 200

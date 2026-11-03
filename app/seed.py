@@ -27,6 +27,7 @@ SUPPLIERS = [
 
 def run() -> None:
     today = clock.now().date()
+    db.set_setting("seeded_on", today.isoformat())
     for username, name, role in USERS:
         db.execute("INSERT INTO users(username, name, role, pw_hash) VALUES (?,?,?,?)",
                    (username, name, role, auth.hash_password(DEMO_PASSWORD)))

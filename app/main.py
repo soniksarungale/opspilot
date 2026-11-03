@@ -1,10 +1,12 @@
 import logging
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,9 +23,12 @@ def _escalation_loop() -> None:
     while True:
         time.sleep(60)
         try:
+            # Sample emails say "today", so the shared demo data is rebuilt once a day to keep dates meaningful.
+            if os.getenv("DAILY_RESET") == "1" and db.get_setting("seeded_on") != datetime.now(clock.IST).date().isoformat():
+                db.reset()
             workflow.escalate_overdue()
         except Exception:
-            log.exception("escalation check failed")
+            log.exception("background check failed")
 
 
 @asynccontextmanager
@@ -43,7 +48,7 @@ def _error(status: int):
 
 
 for exc_type, code in [(PermissionError, 403), (workflow.InputError, 400), (ValueError, 409),
-                       (LookupError, 404), (AgentError, 503)]:
+                       (LookupError, 404), (AgentError, 503), (workflow.RateLimited, 429)]:
     app.add_exception_handler(exc_type, _error(code))
 
 
@@ -102,6 +107,10 @@ class LLMSwitch(BaseModel):
     down: bool
 
 
+class OutboxSwitch(BaseModel):
+    down: bool
+
+
 def public(user: dict) -> dict:
     return {"username": user["username"], "name": user["name"], "role": user["role"]}
 
@@ -116,8 +125,8 @@ def login(body: Login, response: Response):
 
 
 @app.post("/api/logout")
-def logout(response: Response, user: dict = Depends(current_user)):
-    db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+def logout(request: Request, response: Response, user: dict = Depends(current_user)):
+    db.execute("DELETE FROM sessions WHERE token=?", (request.cookies.get("session"),))
     response.delete_cookie("session")
     return {"ok": True}
 
@@ -203,8 +212,8 @@ def draft_message(request_id: int, body: Audience, user: dict = Depends(current_
 
 @app.post("/api/messages/{message_id}/send")
 def send_message(message_id: int, user: dict = Depends(current_user)):
-    workflow.send(message_id, user)
-    return {"ok": True}
+    status = workflow.send(message_id, user)
+    return {"ok": status == "sent", "status": status}
 
 
 @app.post("/api/requests/{request_id}/summary")
@@ -214,7 +223,7 @@ def summary(request_id: int, user: dict = Depends(current_user)):
 
 @app.post("/api/report")
 def report(user: dict = Depends(current_user)):
-    return workflow.portfolio_report()
+    return workflow.portfolio_report(user)
 
 
 @app.get("/api/approvals")
@@ -236,7 +245,21 @@ def decide(approval_id: int, body: Decision, user: dict = Depends(current_user))
 @app.get("/api/admin/state")
 def admin_state(user: dict = Depends(require("admin"))):
     return {"now": clock.iso(clock.now()), "offset_hours": clock.offset_hours(),
-            "llm_down": db.get_setting("llm_down") == "1"}
+            "llm_down": db.get_setting("llm_down") == "1", "outbox_down": db.get_setting("outbox_down") == "1",
+            "seeded_on": db.get_setting("seeded_on")}
+
+
+@app.post("/api/admin/outbox")
+def admin_outbox(body: OutboxSwitch, user: dict = Depends(require("admin"))):
+    db.set_setting("outbox_down", "1" if body.down else "0")
+    db.log(None, user["username"], "user", "outbox_switch", {"down": body.down})
+    return {"outbox_down": body.down}
+
+
+@app.post("/api/admin/reset")
+def admin_reset(user: dict = Depends(require("admin"))):
+    db.reset()
+    return {"ok": True}
 
 
 @app.post("/api/admin/clock")

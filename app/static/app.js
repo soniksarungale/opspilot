@@ -125,11 +125,12 @@ async function detailView(id) {
   if (req.status === "processing") timer = setTimeout(render, 3000);
   const risk = req.risk || {};
   const lowConf = req.flags.some(f => f.code === "low_confidence");
-  const can = a => ({ start: req.status === "review", resolve: req.status === "in_progress", close: req.status === "resolved", cancel: OPEN.includes(req.status) })[a];
-  const buttons = ["start", "resolve", "close", "cancel"].filter(can).map(a => `<button data-act="status" data-action="${a}" class="${a === "cancel" ? "danger" : ""}">${a[0].toUpperCase() + a.slice(1)}</button>`).join(" ");
+  const can = a => ({ resolve: req.status === "in_progress", close: req.status === "resolved", cancel: OPEN.includes(req.status) })[a];
+  const buttons = ["resolve", "close", "cancel"].filter(can).map(a => `<button data-act="status" data-action="${a}" class="${a === "cancel" ? "danger" : ""}">${a[0].toUpperCase() + a.slice(1)}</button>`).join(" ");
   const options = req.options.map((o, i) => optionCard(o, i, req)).join("");
   const messages = req.messages.map(m => `<div class="box"><b>${esc(m.subject)}</b> <span class="muted">to ${esc(m.recipient)} (${esc(m.status)})</span>
-    <pre class="text">${esc(m.body)}</pre>${m.status === "draft" ? `<button data-act="send" data-id="${m.id}">Send</button>` : ""}</div>`).join("");
+    <pre class="text">${esc(m.body)}</pre>${m.status === "failed" ? '<div class="flag red">Not delivered: the mail server was unavailable</div>' : ""}
+    ${m.status === "draft" || m.status === "failed" ? `<button data-act="send" data-id="${m.id}">${m.status === "failed" ? "Retry send" : "Send"}</button>` : ""}</div>`).join("");
   return `<p><a href="#/requests">&larr; Requests</a></p><h1>#${req.id} ${esc(req.subject)} <span class="tag">${esc(label(req.status))}</span></h1>
   <div class="cols"><div>
     <div class="box"><div class="muted">From ${esc(req.sender)} via ${esc(req.channel)}, ${esc(when(req.received_at))}</div><pre class="mail">${esc(req.body)}</pre></div>
@@ -174,6 +175,10 @@ async function adminView() {
     <button data-act="clock" data-hours="1">+1h</button> <button data-act="clock" data-hours="4">+4h</button> <button data-act="clock" data-hours="">Reset</button></div>
     <div class="box"><p>AI service: <b>${s.llm_down ? "marked unavailable" : "available"}</b></p>
     <button data-act="llm" data-down="${s.llm_down ? 0 : 1}">${s.llm_down ? "Mark available" : "Simulate outage"}</button></div>
+    <div class="box"><p>Mail server: <b>${s.outbox_down ? "failing" : "available"}</b></p>
+    <button data-act="outbox" data-down="${s.outbox_down ? 0 : 1}">${s.outbox_down ? "Restore" : "Simulate send failure"}</button></div>
+    <div class="box"><p>Demo data seeded on ${esc(s.seeded_on)}. Resetting deletes all requests and signs everyone out.</p>
+    <button class="danger" data-act="reset">Reset demo data</button></div>
     <p><a href="/api/health" target="_blank">Health check</a></p>`;
 }
 
@@ -226,7 +231,6 @@ const actions = {
   },
   async retry() { await api(`/api/requests/${reqId()}/retry`, {}); },
   async draft() { await api(`/api/requests/${reqId()}/messages`, { audience: document.getElementById("audience").value }); },
-  async send(d) { await api(`/api/messages/${d.id}/send`, {}); },
   async summary() { await api(`/api/requests/${reqId()}/summary`, {}); },
   async report() {
     const box = document.getElementById("report");
@@ -235,6 +239,15 @@ const actions = {
     catch { box.textContent = "Report unavailable."; }
   },
   async clock(d) { await api("/api/admin/clock", { hours: d.hours === "" ? null : Number(d.hours) }); },
+  async outbox(d) { await api("/api/admin/outbox", { down: d.down === "1" }); },
+  async reset() {
+    if (!confirm("Delete all requests and reload the sample data?")) return;
+    await api("/api/admin/reset", {}); me = null; location.hash = "";
+  },
+  async send(d) {
+    const r = await api(`/api/messages/${d.id}/send`, {});
+    if (r.status === "failed") showError("Message not delivered: the mail server is unavailable. It is marked failed; retry later.");
+  },
   async llm(d) { await api("/api/admin/llm", { down: d.down === "1" }); },
 };
 

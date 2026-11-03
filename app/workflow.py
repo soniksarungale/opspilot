@@ -21,6 +21,25 @@ class InputError(ValueError):
     """Invalid input from the user, reported as 400 rather than a state conflict."""
 
 
+class RateLimited(Exception):
+    pass
+
+
+# Actions that start model calls; capped per user because every demo user shares one model login.
+MODEL_ACTIONS = ("created", "retry", "field_corrected", "circumstances_changed", "message_drafted",
+                 "summary_generated", "report_generated")
+MODEL_ACTIONS_PER_HOUR = 30
+
+
+def check_rate(user: dict) -> None:
+    since = clock.iso(clock.now() - timedelta(hours=1))
+    marks = ",".join("?" * len(MODEL_ACTIONS))
+    used = db.one(f"SELECT COUNT(*) AS n FROM audit WHERE actor=? AND actor_type='user' AND ts>=? "
+                  f"AND action IN ({marks})", (user["username"], since, *MODEL_ACTIONS))["n"]
+    if used >= MODEL_ACTIONS_PER_HOUR:
+        raise RateLimited(f"Limit of {MODEL_ACTIONS_PER_HOUR} analysis actions per hour reached. Try again later.")
+
+
 def inr(amount: int) -> str:
     digits = str(int(amount))
     head, tail = digits[:-3], digits[-3:]
@@ -69,6 +88,8 @@ def _name(user: dict) -> str:
 
 
 def create_request(subject: str, body: str, sender: str, channel: str, received_at: str, user: dict | None) -> int:
+    if user:
+        check_rate(user)
     now = clock.iso(clock.now())
     request_id = db.execute(
         "INSERT INTO requests(subject, sender, channel, body, received_at, status, facts, evidence, flags, risk, "
@@ -232,6 +253,7 @@ def correct_field(request_id: int, user: dict, field: str, value, reason: str) -
         raise InputError("Unknown field")
     if req["status"] not in ("needs_info", "review"):
         raise ValueError("Fields can only be corrected before a decision is chosen")
+    check_rate(user)
     if field in INT_FIELDS and value not in (None, ""):
         try:
             value = int(value)
@@ -269,13 +291,15 @@ def choose(request_id: int, user: dict, option_index: int | None = None, custom:
         option = req["options"][option_index]
         if option.get("rejected"):
             raise ValueError("That option was already rejected")
-    override = bool(custom) or not option.get("recommended")
+    low_confidence = any(f["code"] == "low_confidence" for f in req["flags"])
+    override = bool(custom) or not option.get("recommended") or low_confidence
     if override and not reason.strip():
-        raise InputError("A reason is required to override the recommendation")
+        raise InputError("A reason is required to override or to act on a low-confidence recommendation")
     db.log(request_id, _name(user), "user", "recommendation_overridden" if override else "recommendation_accepted",
            {"option": option["title"], "est_cost_inr": option["est_cost_inr"], "reason": reason})
     now, cost = clock.now(), option["est_cost_inr"]
-    if cost <= 0:
+    why = rules.approval_reasons(cost, (req["risk"] or {}).get("final_level"), low_confidence)
+    if not why:
         _save(request_id, chosen=option, status="in_progress")
         return
     role = rules.approver_for(cost)
@@ -285,9 +309,9 @@ def choose(request_id: int, user: dict, option_index: int | None = None, custom:
                (request_id, role, cost, clock.iso(due), "pending", clock.iso(now)))
     _add_message(request_id, role, f"Approval needed: {req['subject']}",
                  f"Request #{request_id} needs your approval.\nAction: {option['title']}\n"
-                 f"Extra cost: {inr(cost)}\nDecision needed by: {due.strftime('%d %b %Y, %I:%M %p')} IST.")
+                 f"Extra cost: {inr(cost)}\nWhy approval is needed: {'; '.join(why)}\nDecision needed by: {due.strftime('%d %b %Y, %I:%M %p')} IST.")
     _save(request_id, chosen=option, status="pending_approval")
-    db.log(request_id, "system", "system", "approval_requested", {"role": role, "amount": cost, "due_at": clock.iso(due)})
+    db.log(request_id, "system", "system", "approval_requested", {"role": role, "amount": cost, "due_at": clock.iso(due), "why": why})
 
 
 def decide(approval_id: int, user: dict, approve: bool, reason: str = "") -> None:
@@ -295,10 +319,16 @@ def decide(approval_id: int, user: dict, approve: bool, reason: str = "") -> Non
     if not approval:
         raise LookupError("Approval not found")
     request_id = approval["request_id"]
-    if approval["status"] != "pending" or not rules.can_approve(user["role"], approval["amount"]):
+    if approval["status"] != "pending":
+        raise ValueError(f"This approval is already {approval['status']}")
+    chooser = db.one("SELECT actor FROM audit WHERE request_id=? AND action IN "
+                     "('recommendation_accepted', 'recommendation_overridden') ORDER BY id DESC LIMIT 1", (request_id,))
+    own = bool(chooser) and chooser["actor"] == _name(user)
+    if own or not rules.can_approve(user["role"], approval["amount"]):
         db.log(request_id, _name(user), "user", "unauthorized_attempt",
-               {"approval_id": approval_id, "amount": approval["amount"], "role": user["role"], "approval_status": approval["status"]})
-        raise PermissionError("You are not allowed to decide this approval")
+               {"approval_id": approval_id, "amount": approval["amount"], "role": user["role"], "own_choice": own})
+        raise PermissionError("You cannot approve an action you chose yourself" if own
+                              else "You are not allowed to decide this approval")
     if not approve and not reason.strip():
         raise InputError("A reason is required to reject")
     now = clock.iso(clock.now())
@@ -352,6 +382,7 @@ def supplier_update(request_id: int, user: dict, new_delay_days: int, note: str 
         raise ValueError("This request can no longer be changed")
     if not isinstance(new_delay_days, int) or new_delay_days < 0:
         raise InputError("Delay must be a whole number of days")
+    check_rate(user)
     facts, evidence = req["facts"], req["evidence"]
     before = facts.get("delay_days")
     facts["delay_days"] = new_delay_days
@@ -370,7 +401,7 @@ def _cancel_pending(request_id: int, user: dict, why: str) -> list[dict]:
     return pending
 
 
-TRANSITIONS = {"start": ("review", "in_progress"), "resolve": ("in_progress", "resolved"), "close": ("resolved", "closed")}
+TRANSITIONS = {"resolve": ("in_progress", "resolved"), "close": ("resolved", "closed")}
 
 
 def transition(request_id: int, user: dict, action: str, note: str = "") -> None:
@@ -397,6 +428,7 @@ def retry(request_id: int, user: dict) -> None:
     req = get(request_id)
     if req["status"] not in ("needs_info", "review"):
         raise ValueError("Only requests waiting for information or review can be retried")
+    check_rate(user)
     db.log(request_id, _name(user), "user", "retry", {})
     _save(request_id, status="processing")
     _background(process if not req["facts"] else assess, request_id)
@@ -411,6 +443,7 @@ def _case(req: dict) -> dict:
 def draft(request_id: int, user: dict, audience: str) -> int:
     if audience not in AUDIENCES:
         raise InputError("Audience must be one of: " + ", ".join(AUDIENCES))
+    check_rate(user)
     req = get(request_id)
     out = agents.draft_message(req, audience, _case(req))
     message_id = _add_message(request_id, out["recipient"], out["subject"], out["body"])
@@ -418,17 +451,24 @@ def draft(request_id: int, user: dict, audience: str) -> int:
     return message_id
 
 
-def send(message_id: int, user: dict) -> None:
+def send(message_id: int, user: dict) -> str:
     message = db.one("SELECT * FROM messages WHERE id=?", (message_id,))
     if not message:
         raise LookupError("Message not found")
-    if message["status"] != "draft":
+    if message["status"] not in ("draft", "failed"):
         raise ValueError("Message was already sent")
+    detail = {"message_id": message_id, "recipient": message["recipient"]}
+    if db.get_setting("outbox_down") == "1":
+        db.execute("UPDATE messages SET status='failed' WHERE id=?", (message_id,))
+        db.log(message["request_id"], "outbox", "system", "message_failed", {**detail, "error": "Mail server unavailable"})
+        return "failed"
     db.execute("UPDATE messages SET status='sent', sent_at=? WHERE id=?", (clock.iso(clock.now()), message_id))
-    db.log(message["request_id"], _name(user), "user", "message_sent", {"message_id": message_id, "recipient": message["recipient"]})
+    db.log(message["request_id"], _name(user), "user", "message_sent", detail)
+    return "sent"
 
 
 def summarize(request_id: int, user: dict) -> str:
+    check_rate(user)
     req = get(request_id)
     out = agents.report(_case(req), request_id)
     text = f"{out['headline']}\n\n{out['body']}"
@@ -437,7 +477,9 @@ def summarize(request_id: int, user: dict) -> str:
     return text
 
 
-def portfolio_report() -> dict:
+def portfolio_report(user: dict) -> dict:
+    check_rate(user)
+    db.log(None, _name(user), "user", "report_generated", {})
     cases = []
     for row in db.query("SELECT id FROM requests WHERE status != 'cancelled' ORDER BY id"):
         req = get(row["id"])

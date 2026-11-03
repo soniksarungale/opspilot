@@ -37,11 +37,84 @@ def test_happy_path_from_email_to_closure(fake_llm):
     assert {"agent", "user"} <= types
 
 
-def test_choosing_a_zero_cost_option_skips_approval(fake_llm):
+def test_zero_cost_option_on_high_risk_case_still_needs_manager(fake_llm):
+    req = imported(1)
+    workflow.choose(req["id"], user("analyst"), option_index=2, reason="Launch can go ahead with fewer units")
+    approval = pending(req["id"])
+    assert workflow.get(req["id"])["status"] == "pending_approval"
+    assert approval["role"] == "manager" and approval["amount"] == 0
+
+
+def test_zero_cost_option_on_low_risk_case_skips_approval(fake_llm, monkeypatch):
+    from app import rules
+    monkeypatch.setattr(rules, "rule_risk", lambda *a: "low")
+    fake_llm.risk_level = "low"
     req = imported(1)
     workflow.choose(req["id"], user("analyst"), option_index=2, reason="Launch can go ahead with fewer units")
     assert workflow.get(req["id"])["status"] == "in_progress"
     assert pending(req["id"]) is None
+
+
+def test_start_without_a_decision_is_not_possible(fake_llm):
+    req = imported(1)
+    with pytest.raises(workflow.InputError):
+        workflow.transition(req["id"], user("analyst"), "start")
+
+
+def test_low_confidence_choice_needs_a_reason(fake_llm):
+    req = imported(1)
+    workflow._save(req["id"], flags=req["flags"] + [{"code": "low_confidence", "message": "low"}])
+    with pytest.raises(workflow.InputError):
+        workflow.choose(req["id"], user("analyst"), option_index=0)
+    workflow.choose(req["id"], user("analyst"), option_index=0, reason="Checked stock by phone")
+    assert workflow.get(req["id"])["status"] == "pending_approval"
+
+
+def test_approver_cannot_approve_own_choice(fake_llm):
+    req = imported(1)
+    workflow.choose(req["id"], user("manager"), option_index=0)
+    approval = pending(req["id"])
+    with pytest.raises(PermissionError):
+        workflow.decide(approval["id"], user("manager"), True)
+    assert "unauthorized_attempt" in actions(req["id"])
+    workflow.decide(approval["id"], user("head"), True)
+    assert workflow.get(req["id"])["status"] == "in_progress"
+
+
+def test_deciding_twice_is_a_conflict_not_unauthorized(fake_llm):
+    req = imported(1)
+    workflow.choose(req["id"], user("analyst"), option_index=0)
+    approval = pending(req["id"])
+    workflow.decide(approval["id"], user("manager"), True)
+    with pytest.raises(ValueError):
+        workflow.decide(approval["id"], user("manager"), True)
+    assert "unauthorized_attempt" not in actions(req["id"])
+
+
+def test_failed_send_is_recorded_and_can_be_retried(fake_llm):
+    req = imported(1)
+    message_id = workflow.draft(req["id"], user("analyst"), "requester")
+    db.set_setting("outbox_down", "1")
+    assert workflow.send(message_id, user("analyst")) == "failed"
+    assert db.one("SELECT status FROM messages WHERE id=?", (message_id,))["status"] == "failed"
+    assert "message_failed" in actions(req["id"])
+    db.set_setting("outbox_down", "0")
+    assert workflow.send(message_id, user("analyst")) == "sent"
+
+
+def test_model_actions_are_capped_per_user(fake_llm, monkeypatch):
+    monkeypatch.setattr(workflow, "MODEL_ACTIONS_PER_HOUR", 1)
+    imported(1)
+    with pytest.raises(workflow.RateLimited):
+        imported(2)
+    workflow.import_email(2, user("manager"))
+
+
+def test_reset_restores_sample_data(fake_llm):
+    imported(1)
+    db.reset()
+    assert db.query("SELECT id FROM requests") == []
+    assert len(db.query("SELECT id FROM inbox")) == 6 and user("admin")
 
 
 def test_second_report_of_same_issue_is_flagged_duplicate(fake_llm):
