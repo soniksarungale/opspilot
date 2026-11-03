@@ -134,9 +134,3 @@ No test calls the real model.
 
 Next steps: read a real mailbox (IMAP), move storage to a hosted database, retry and report failed notifications,
 and add session expiry.
-
-## Use of AI tools
-
-I used Claude Code to help write the code, tests and documents in this repository. I chose the scope, the stack,
-the approval limits and the edge cases to cover, reviewed what it produced, and checked the behaviour by running the
-tests and by processing the sample emails with the real model.
