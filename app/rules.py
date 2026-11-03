@@ -67,19 +67,19 @@ def ungrounded_fields(facts: dict, evidence: dict, body: str) -> list[str]:
     return bad
 
 
-def _words(text) -> set[str]:
+def words(text) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(w) > 3}
 
 
-def _same_place(a, b) -> bool:
+def same_place(a, b) -> bool:
     a, b = str(a or "").lower().strip(), str(b or "").lower().strip()
     return bool(a) and bool(b) and (a in b or b in a)
 
 
 def match_inventory(facts: dict, rows: list[dict]) -> list[dict]:
-    item_words = _words(facts.get("item"))
+    item_words = words(facts.get("item"))
     place = facts.get("location") or facts.get("store")
-    return [r for r in rows if item_words & _words(r["item"]) and _same_place(place, r["location"])]
+    return [r for r in rows if item_words & words(r["item"]) and same_place(place, r["location"])]
 
 
 def conflicts(facts: dict, inventory_rows: list[dict]) -> list[str]:
@@ -166,8 +166,8 @@ def find_duplicate(facts: dict, body: str, open_requests: list[dict]) -> int | N
         if other["status"] in ("closed", "cancelled"):
             continue
         theirs = other.get("facts") or {}
-        same_issue = _same_place(facts.get("location"), theirs.get("location")) and bool(
-            _words(facts.get("item")) & _words(theirs.get("item")))
+        same_issue = same_place(facts.get("location"), theirs.get("location")) and bool(
+            words(facts.get("item")) & words(theirs.get("item")))
         if same_issue or difflib.SequenceMatcher(None, _squash(body), _squash(other["body"])).ratio() > 0.8:
             return other["id"]
     return None
