@@ -30,7 +30,7 @@ The app listens on http://127.0.0.1:8000. The SQLite file is created at `data/op
 with demo users, stores, inventory, suppliers and six sample emails in the inbox (dated today, IST).
 
 Settings are environment variables (see `.env.example`): `LLM_PROVIDER`, `LLM_MODEL`, `CLAUDE_BIN`, `LLM_TIMEOUT`,
-`DB_PATH`.
+`DB_PATH`, `DAILY_RESET`.
 
 The language model is reached through the `claude` command line tool in print mode, with tools, settings and
 session storage switched off and one process at a time. It must be installed and logged in on the machine.
@@ -54,7 +54,7 @@ email / manual entry
         |
  confidence score  ->  review by a person  ->  choose / override
         |
- cost > 0 ?  -> approval routed by amount  -> approve / reject / escalate when overdue
+ cost > 0, high risk or low confidence ?  -> approval routed by amount  -> approve / reject / escalate
         |
  in progress -> resolved -> closed        comms agent drafts emails, reporter agent writes summaries
 ```
@@ -64,15 +64,17 @@ options and flags, and each agent receives only the slice it needs as a JSON pay
 the verification result, inventory rows, suppliers and the options an approver already rejected). Agents never call
 each other; `workflow.py` runs them in order and stores their output.
 
-**When human approval is mandatory.** Any option with an extra cost above zero creates an approval. It goes to the
-lowest role whose limit covers the amount. Agents cannot approve anything. Choosing an option other than the
+**When human approval is mandatory.** A chosen action needs an approval when it has an extra cost above zero, when
+the final risk is high or critical, or when confidence is low. It goes to the lowest role whose limit covers the
+amount (a manager for zero-cost actions). The person who chose the action cannot approve it, so one other person
+always signs off. Agents cannot approve anything. A request cannot be started without a chosen action. Choosing an option other than the
 recommended one, or writing a custom one, needs a written reason. Rejections need a reason too.
 
 **How confidence is determined.** It is computed in code, not asked of the model: start at 1.0 and subtract 0.1 per
 missing required field, 0.15 per value the email does not support, 0.15 per inventory conflict, 0.2 if the risk agent
 and the rules differ by two levels or more, 0.3 for suspected injection and 0.3 if the planner says the evidence is
-insufficient. Below 0.6 the recommendation is not preselected and the screen asks the user to choose or write an
-action.
+insufficient. Below 0.6 the recommendation is not preselected, choosing any action needs a written reason, and the
+action goes to an approver.
 
 **How unsupported or wrong AI output is handled.**
 - Each agent must return JSON with the expected keys and types. Anything else gets one retry that includes the
@@ -102,19 +104,19 @@ and refused attempts to approve. The request page shows it, newest last.
 | Approval rejection | Approver rejects | Option marked rejected, new options | Choose again | `approval_rejected` |
 | Changing circumstances | Supplier update form | Pending approval cancelled, analysis re-run | Choose again | `circumstances_changed` |
 | Unavailable AI service | Call fails or admin outage switch | "AI step failed" flag, status needs info | Retry button | `processing_failed`, agent `run` with error |
-| Unauthorized action | Role limit check | Error banner, 403 | Ask the right approver | `unauthorized_attempt` |
+| Unauthorized action | Role limit check, or approving your own choice | Error banner, 403 | Ask another approver | `unauthorized_attempt` |
 | Prompt injection | Patterns plus model flag | Red flag, lower confidence | Human review | `assessed` |
 | Request cancellation | Cancel button | Approvals cancelled, approver gets a draft notice | None needed | `status_changed`, `approval_cancelled` |
+| Communication failure | Admin "simulate send failure" switch | Message marked failed, red note | Retry send | `message_failed`, `message_sent` |
 | Contradictory agents | Risk levels two apart | Flag with both levels, higher used | Review | `assessed` |
 
-Not covered: communication failure. The outbox is a mock and always succeeds.
-
-The admin page can move the clock forward (to trigger escalation without waiting) and switch the AI service off
-(to show the outage path).
+The admin page can move the clock forward (to trigger escalation without waiting), switch the AI service off (to
+show the outage path), make the mail server fail, and reset the demo data. With `DAILY_RESET=1` (set on the live
+demo) the data is rebuilt once a day, because the sample emails say "today".
 
 ## Tests
 
-`uv run pytest -q` runs 65 tests against a temporary database with a fake model: the rules (limits, confidence,
+`uv run pytest -q` runs 75 tests against a temporary database with a fake model: the rules (limits, confidence,
 grounding, duplicates), the workflow (happy path and each edge case above) and the API (login, roles, error codes).
 No test calls the real model.
 
@@ -123,9 +125,11 @@ No test calls the real model.
 - Email and the outbox are mocked: the inbox is seeded from `data/sample_emails.json` and "Send" only marks a message
   as sent.
 - Extra costs are estimates produced by the planner from the data given; nobody checks them against a price list.
-- Sessions do not expire, there is no rate limiting, and cookies are not marked secure by the app itself (TLS ends at
+- Each user can start at most 30 analysis actions per hour, because all demo users share one model login.
+- Sessions do not expire, and cookies are not marked secure by the app itself (TLS ends at
   the web server).
 - One model process runs at a time, so analysis takes tens of seconds and requests queue.
+- Demo accounts are shared, so evaluators see each other's requests; the admin can reset the data.
 - SQLite with a single writer lock is enough for a demo, not for many users.
 
 Next steps: read a real mailbox (IMAP), move storage to a hosted database, retry and report failed notifications,

@@ -24,8 +24,8 @@ online, and leaves no reliable record of who decided what.
 4. **Assess.** The risk agent rates urgency and impact; a rule-based score is computed beside it; the higher level wins.
 5. **Recommend.** The planner proposes two or three options with extra cost, timing, rationale and risks.
 6. **Review.** A person accepts the recommendation, picks another option or writes their own. Overrides need a reason.
-7. **Approve.** A cost above zero creates an approval for the lowest role whose limit covers it. Overdue approvals escalate to the next role.
-8. **Execute and close.** Start, resolve, close. Draft emails for the requester, supplier, store team or approver are written by the communications agent; a person sends them.
+7. **Approve.** A cost above zero, a high or critical risk, or low confidence creates an approval for the lowest role whose limit covers the cost. The person who chose the action cannot approve it. Overdue approvals escalate to the next role.
+8. **Execute and close.** Work starts once the action is chosen and approved; then resolve and close. Draft emails for the requester, supplier, store team or approver are written by the communications agent; a person sends them.
 9. **Report.** The reporting agent summarises one case or the whole portfolio.
 
 Every step is written to an append-only audit trail.
@@ -73,7 +73,7 @@ Every step is written to an append-only audit trail.
 
 ## 5. Edge-case handling
 
-Fourteen of the fifteen listed scenarios are handled; communication failure is not, because the outbox is a mock.
+All fifteen listed scenarios are handled. Mail sending is a mock with a switch that makes it fail, to show the failure path.
 
 | Scenario | Detection | Response |
 |---|---|---|
@@ -82,12 +82,13 @@ Fourteen of the fifteen listed scenarios are handled; communication failure is n
 | Duplicate request | Same place and item, or similar text | Flag linking the earlier request |
 | Unclear intent | Several intents, no clear ask | All intents listed; missing fields flagged |
 | Incorrect extraction | User edits a field | Edit logged with reason; analysis re-runs |
-| Low-confidence recommendation | Confidence below 0.6 | No preselected option; user chooses or writes one |
+| Low-confidence recommendation | Confidence below 0.6 | No preselected option; choice needs a reason and an approver |
 | Approval delay | Due time passes | Escalation to next role; new approval; audit entry |
 | Approval rejection | Approver rejects with reason | Option marked rejected; planner proposes alternatives |
 | Changing circumstances | Supplier update | Pending approval cancelled; analysis re-run |
 | Unavailable AI service | Call error, timeout, bad output twice | Flag; request stays open; retry |
-| Unauthorized action | Role limit check | Refused with 403; attempt in audit |
+| Unauthorized action | Role limit check; approving own choice | Refused with 403; attempt in audit |
+| Communication failure | Mail server error | Message marked failed; retry send; audit entry |
 | Prompt injection | Patterns and model flag | Flag; instructions ignored; human review |
 | Request cancellation | Cancel button | All approvals cancelled; approver notified by draft |
 | Contradictory agents | Risk levels two or more apart | Flag; higher level used |
@@ -107,5 +108,5 @@ Targets for a pilot (not measured results):
 
 **In the MVP:** everything in section 3, the six sample emails, the demo roles, the admin tools, tests and a container image.
 
-**Out of the MVP:** live mailbox and outbound email with delivery retries, single sign-on, session expiry, price and
+**Out of the MVP:** live mailbox and real outbound email, single sign-on, session expiry, price and
 supplier catalogues, multi-currency, mobile app, notifications by chat, analytics dashboards.
